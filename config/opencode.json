@@ -1,0 +1,33 @@
+{
+    "$schema": "https://opencode.ai/config.json",
+    "agent": {
+        "build": {
+            "steps": 250
+        }
+    },
+    "permission": {
+        "external_directory": {
+            "/tmp/**": "allow"
+        }
+    },
+    "model": "trb/dsv32",
+    "provider": {
+        "gdc": {
+            "npm": "@ai-sdk/openai-compatible",
+            "name": "trb (local)",
+            "options": {
+                "baseURL": "http://{LLM_API}:30000/v1"
+            },
+            "models": {
+                "dsv32": {
+                    "_launch": true,
+                    "name": "dsv32",
+                    "limit": {
+                        "output": 20000,
+                        "context": 131072
+                    }
+                }
+            }
+        }
+    }
+}
