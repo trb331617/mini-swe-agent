@@ -75,8 +75,8 @@ class DockerEnvironment:
         """Start the Docker container and return the container ID."""
         container_name = f"minisweagent-{uuid.uuid4().hex[:8]}"
 
-        http_proxy = os.environ.get("http_proxy", "10.27.66.3:18000")
-        no_proxy = os.environ.get("no_proxy", "10.79.130.166")
+        http_proxy = os.environ.get("http_proxy", "")
+        no_proxy = os.environ.get("no_proxy", "")
         no_proxy_list = [no_proxy, "127.0.0.1,localhost,local,.local,172.,.baidu.com,.baidu-int.com,.cn,.baidubce.com,.bcebos.com"]
         no_proxy_str = ",".join(no_proxy_list)
         env_vars = {
