@@ -1,3 +1,8 @@
+#!/usr/bin/env python3
+
+"""Run mini-SWE-agent on SWE-bench instances in batch mode."""
+# Read this first: https://mini-swe-agent.com/latest/usage/swebench/  (usage docs)
+
 import concurrent.futures
 import os
 import json
@@ -15,6 +20,7 @@ from rich.live import Live
 from minisweagent import Environment
 from minisweagent.agents.default import DefaultAgent
 from minisweagent.agents.opencode import OpenCode
+from minisweagent.agents.claudecode import ClaudeCode
 from minisweagent.config import builtin_config_dir, get_config_from_spec
 from minisweagent.environments import get_environment
 from minisweagent.models import get_model
@@ -89,21 +95,55 @@ class ProgressOpenCode(OpenCode):
         self.progress_manager.update_instance_status(self.instance_id, f"Step {self.n_calls + 1:3d} (${self.cost:.2f})")
         return super().step()
 
+class ProgressClaudeCode(ClaudeCode):
+    """Simple wrapper around ClaudeCode that provides progress updates."""
+
+    def __init__(self, *args, progress_manager: RunBatchProgressManager, instance_id: str = "", **kwargs):
+        super().__init__(*args, **kwargs)
+        super().init(instance_id)
+        self.progress_manager: RunBatchProgressManager = progress_manager
+        self.instance_id = instance_id
+
+    def step(self) -> dict:
+        """Override step to provide progress updates."""
+        self.progress_manager.update_instance_status(self.instance_id, f"Step {self.n_calls + 1:3d} (${self.cost:.2f})")
+        return super().step()
+
 
 def get_swebench_docker_image_name(instance: dict) -> str:
-    """Get the image name for a SWEBench instance."""
-    image_name = instance.get("image_name", None) or instance.get("docker_image", None)
-    if image_name is None:
-        # Docker doesn't allow double underscore, so we replace them with a magic token
-        iid = instance["instance_id"]
-        id_docker_compatible = iid.replace("__", "_1776_")
-        # image_name = f"docker.io/swebench/sweb.eval.x86_64.{id_docker_compatible}:latest".lower()
+    data_type = os.environ.get("DATA_TYPE", "")
+    assert data_type in ['verified', 'pro', 'rebench'], f"data_type only support ['verified','pro'], but got {data_type}."
+    agent_type = os.environ.get("AGENT", "swe")
+    assert agent_type in ["swe", "opencode", "claude"], f"agent_type only support ['swe','opencode'], but got {agent_type}."
 
-        # mini-swe-agent
-        image_name = f"iregistry.baidu-int.com/ainf-matrix/swe-bench-verified:sweb.eval.x86_64.{id_docker_compatible}".lower()
+    if data_type == "verified":
+        image_name = instance.get("image_name", None) or instance.get("docker_image", None)
+        if image_name is None:
+            # Docker doesn't allow double underscore, so we replace them with a magic token
+            iid = instance["instance_id"]
+            id_docker_compatible = iid.replace("__", "_1776_")
+            # image_name = f"docker.io/swebench/sweb.eval.x86_64.{id_docker_compatible}:latest".lower()
+            if agent_type == "swe":  # mini-swe-agent
+                image_name = f"iregistry.baidu-int.com/ainf-matrix/swe-bench-verified:sweb.eval.x86_64.{id_docker_compatible}".lower()
+            else:
+                image_name = f"iregistry.baidu-int.com/ainf-matrix/swe-bench-verified-opencode:sweb.eval.x86_64.{id_docker_compatible}".lower()
+    elif data_type == "pro":
+        tag = instance.get("dockerhub_tag", None)
+        assert tag is not None, "dockerhub_tag must be specified for pro data"
+        if agent_type == "swe":
+            image_name = f"iregistry.baidu-int.com/ainf-matrix/swe-bench-pro:{tag}"
+        elif agent_type == "claude":
+            image_name = f"iregistry.baidu-int.com/ainf-matrix/swe-bench-pro-claudecode:{tag}"
+        else:
+            image_name = f"iregistry.baidu-int.com/ainf-matrix/swe-bench-pro-opencode:{tag}"
+    elif data_type == "rebench":
+        image_name = instance.get("image_name", None)
+        assert image_name is not None, f"Task {instance['instance_id']} missing image_name."
+        tag = image_name.split('/')[-1].replace(':', "_")
+        image_name = f"iregistry.baidu-int.com/ainf-matrix/swe-rebench-v2:{tag}"
+    else:
+        raise ValueError(f"Unknown data type: {data_type}")
 
-        # opencode
-        image_name = f"iregistry.baidu-int.com/ainf-matrix/swe-bench-verified-opencode:sweb.eval.x86_64.{id_docker_compatible}".lower()
     return image_name
 
 
@@ -115,6 +155,13 @@ def get_sb_environment(config: dict, instance: dict) -> Environment:
         env_config["image"] = image_name
     elif env_config["environment_class"] in ["singularity", "contree"]:
         env_config["image"] = "docker://" + image_name
+
+    data_type = os.environ.get("DATA_TYPE", "")
+    if data_type == "rebench":
+        repo = instance["repo"]
+        if not repo or "/" not in repo:
+            raise ValueError(f"Task {instance_id} missing repo.")
+        env_config["cwd"] = f"/{repo.split('/')[1]}"
 
     env = get_environment(env_config)
     if startup_command := config.get("run", {}).get("env_startup_command"):
@@ -185,6 +232,14 @@ def process_instance(
                 instance_id=instance_id,
                 **config.get("agent", {}),
             )
+        elif agent_type == "claude":
+            agent = ProgressClaudeCode(
+                model,
+                env,
+                progress_manager=progress_manager,
+                instance_id=instance_id,
+                **config.get("agent", {}),
+            )
         else:
             agent = ProgressTrackingAgent(
                 model,
@@ -193,8 +248,15 @@ def process_instance(
                 instance_id=instance_id,
                 **config.get("agent", {}),
             )
+        workdir = ""
+        data_type = os.environ.get("DATA_TYPE", "")
+        if data_type == "rebench":
+            repo = instance["repo"]
+            if not repo or "/" not in repo:
+                raise ValueError(f"Task {instance_id} missing repo.")
+            workdir = f"/{repo.split('/')[1]}"
 
-        info = agent.run(task)
+        info = agent.run(task, workdir)
         exit_status = info.get("exit_status")
         result = info.get("submission")
     except Exception as e:
@@ -316,4 +378,3 @@ def main(
 
 if __name__ == "__main__":
     app()
-  
