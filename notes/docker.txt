@@ -1,0 +1,19 @@
+
+
+docker run -d -i \
+  --privileged \
+  --network host \
+  --name trb_dev \
+  --shm-size 100g \
+  -v /home:/home \
+  -v /home/disk1:/home/disk1 \
+  -v /home/disk3:/home/disk3 \
+  -v /home/disk6:/home/disk6 \
+  -v /ssd1:/ssd1 \
+  -v /tmp:/tmp \
+  --entrypoint /bin/bash \
+  modelscope-registry.cn-beijing.cr.aliyuncs.com/modelscope-repo/modelscope:ubuntu22.04-cuda12.8.1-py312-torch2.10.0-1.39.0
+
+
+
+    
