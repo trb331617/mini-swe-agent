@@ -17,3 +17,11 @@ docker run -d -i \
 
 
     
+镜像下载
+vim /etc/docker/daemon.json
+{
+  "features": {
+    "containerd-snapshotter": true
+  }
+}
+
